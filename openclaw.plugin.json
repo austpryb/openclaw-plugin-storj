@@ -1,0 +1,39 @@
+{
+  "id": "storj",
+  "name": "Storj Storage",
+  "description": "Manage files on Storj decentralized cloud storage — upload, download, list, share",
+  "enabledByDefault": true,
+  "providerAuthEnvVars": {
+    "storj": ["STORJ_ACCESS_GRANT"]
+  },
+  "contracts": {
+    "tools": [
+      "storj_list_buckets",
+      "storj_create_bucket",
+      "storj_delete_bucket",
+      "storj_list_objects",
+      "storj_stat_object",
+      "storj_delete_object",
+      "storj_upload",
+      "storj_download",
+      "storj_share"
+    ]
+  },
+  "uiHints": {
+    "accessGrant": {
+      "label": "Storj Access Grant",
+      "help": "Serialized Storj access grant. Fallback: STORJ_ACCESS_GRANT env var.",
+      "sensitive": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "accessGrant": {
+        "type": ["string", "object"],
+        "description": "Storj serialized access grant (from uplink share or satellite UI)"
+      }
+    }
+  }
+}

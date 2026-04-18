@@ -1,0 +1,26 @@
+{
+  "name": "openclaw-plugin-storj",
+  "version": "0.1.0",
+  "description": "Storj decentralized storage plugin for OpenClaw — upload, download, list, and share files",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "node test.js",
+    "dev": "tsc --watch"
+  },
+  "openclaw": {
+    "extensions": ["./dist/index.js"]
+  },
+  "dependencies": {
+    "koffi": "^2.9.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^5.7.0"
+  },
+  "license": "MIT"
+}
