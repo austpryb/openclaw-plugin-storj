@@ -2,7 +2,7 @@
   "id": "storj",
   "name": "Storj Storage",
   "description": "Manage files on Storj decentralized cloud storage — upload, download, list, share",
-  "enabledByDefault": true,
+  "enabledByDefault": false,
   "providerAuthEnvVars": {
     "storj": ["STORJ_ACCESS_GRANT"]
   },
@@ -27,14 +27,19 @@
       "sensitive": true
     }
   },
+  "requires": {
+    "credentials": ["STORJ_ACCESS_GRANT"],
+    "nativeLibs": ["libuplink (from storj/uplink-c — place in plugin native/ dir or set STORJ_LIBUPLINK_PATH)"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
       "accessGrant": {
         "type": ["string", "object"],
-        "description": "Storj serialized access grant (from uplink share or satellite UI)"
+        "description": "Storj serialized access grant (from uplink share or satellite UI). Required — obtain from satellite.storj.io or 'uplink share' CLI."
       }
-    }
+    },
+    "required": ["accessGrant"]
   }
 }
