@@ -16,7 +16,8 @@
       "storj_delete_object",
       "storj_upload",
       "storj_download",
-      "storj_share"
+      "storj_share",
+      "storj_receive"
     ]
   },
   "uiHints": {

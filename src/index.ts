@@ -416,5 +416,101 @@ export default definePluginEntry({
         }
       },
     });
+
+    // -----------------------------------------------------------------------
+    // storj_receive
+    // -----------------------------------------------------------------------
+    api.registerTool({
+      name: "storj_receive",
+      label: "Receive Shared Storj Files",
+      description:
+        "Open a shared Storj access grant to list and optionally download the files it provides. " +
+        "Use this when another agent or user shares an access grant string with you.",
+      displaySummary: "Browse/download files from a shared Storj access grant",
+      parameters: {
+        type: "object" as const,
+        properties: {
+          accessGrant: {
+            type: "string",
+            description: "The shared Storj access grant string",
+          },
+          download: {
+            type: "boolean",
+            description: "Download all files to localDir (default false — just list)",
+          },
+          localDir: {
+            type: "string",
+            description: "Local directory to download files into (required if download is true)",
+          },
+        },
+        required: ["accessGrant"],
+        additionalProperties: false,
+      },
+      async execute(
+        _toolCallId: string,
+        params: { accessGrant: string; download?: boolean; localDir?: string }
+      ) {
+        let client: StorjClient | null = null;
+        try {
+          client = StorjClient.open(params.accessGrant);
+          const buckets = client.listBuckets();
+
+          if (buckets.length === 0) {
+            return textResult("Shared grant contains no accessible buckets.");
+          }
+
+          const allObjects: { bucket: string; key: string; size: number }[] = [];
+          for (const b of buckets) {
+            const objects = client.listObjects(b.name, { recursive: true });
+            for (const o of objects) {
+              if (!o.isPrefix) {
+                allObjects.push({ bucket: b.name, key: o.key, size: o.contentLength });
+              }
+            }
+          }
+
+          if (allObjects.length === 0) {
+            return textResult(
+              `Shared grant provides access to bucket(s): ${buckets.map(b => b.name).join(", ")} — but no files found.`
+            );
+          }
+
+          const listing = allObjects.map(
+            o => `- \`${o.bucket}/${o.key}\` (${formatBytes(o.size)})`
+          );
+
+          if (!params.download) {
+            return textResult(
+              `Shared grant contains ${allObjects.length} file(s):\n\n${listing.join("\n")}\n\n` +
+              `To download, call this tool again with \`download: true\` and a \`localDir\`.`
+            );
+          }
+
+          if (!params.localDir) {
+            return textResult("Error: localDir is required when download is true.");
+          }
+
+          const { mkdirSync } = await import("node:fs");
+          const { join, dirname } = await import("node:path");
+
+          let downloaded = 0;
+          for (const o of allObjects) {
+            const dest = join(params.localDir, o.bucket, o.key);
+            mkdirSync(dirname(dest), { recursive: true });
+            const data = client.downloadBytes(o.bucket, o.key);
+            writeFileSync(dest, data);
+            downloaded++;
+          }
+
+          return textResult(
+            `Downloaded ${downloaded} file(s) to \`${params.localDir}\`:\n\n${listing.join("\n")}`
+          );
+        } catch (err) {
+          return errorResult(err);
+        } finally {
+          client?.close();
+        }
+      },
+    });
   },
 });
