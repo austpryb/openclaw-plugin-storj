@@ -1,6 +1,6 @@
 {
   "name": "openclaw-plugin-storj",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Storj decentralized storage plugin for OpenClaw — upload, download, list, and share files",
   "type": "module",
   "main": "dist/index.js",
