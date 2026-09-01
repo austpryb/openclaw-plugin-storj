@@ -159,10 +159,20 @@ const UplinkReadResult = koffi.struct("UplinkReadResult", {
   error: koffi.pointer(UplinkError),
 });
 
+// `string` is deliberately a raw pointer, not koffi's "str". With "str", koffi
+// marshals the field back into a *newly allocated* buffer when the struct is
+// passed by value to uplink_free_string_result(), so C free()s a pointer it
+// never allocated — heap corruption, and a SIGSEGV that takes the agent down.
+// Keeping the pointer and decoding it explicitly frees the original allocation.
 const UplinkStringResult = koffi.struct("UplinkStringResult", {
-  string: "str",
+  string: "void *",
   error: koffi.pointer(UplinkError),
 });
+
+/** Read a NUL-terminated C string from a raw pointer. */
+function decodeCString(ptr: unknown): string {
+  return ptr ? (koffi.decode(ptr, "char", -1) as string) : "";
+}
 
 // ---------------------------------------------------------------------------
 // Function bindings (lazy — populated by defineBindings)
@@ -216,6 +226,11 @@ function defineBindings(lib: ReturnType<typeof koffi.load>) {
     close_download: lib.func("void * uplink_close_download(UplinkDownload *)"),
 
     // Free
+    free_project_result: lib.func("void uplink_free_project_result(UplinkProjectResult)"),
+    free_upload_result: lib.func("void uplink_free_upload_result(UplinkUploadResult)"),
+    free_download_result: lib.func("void uplink_free_download_result(UplinkDownloadResult)"),
+    free_write_result: lib.func("void uplink_free_write_result(UplinkWriteResult)"),
+    free_read_result: lib.func("void uplink_free_read_result(UplinkReadResult)"),
     free_string_result: lib.func("void uplink_free_string_result(UplinkStringResult)"),
     free_error: lib.func("void uplink_free_error(void *)"),
   };
@@ -224,6 +239,13 @@ function defineBindings(lib: ReturnType<typeof koffi.load>) {
 // ---------------------------------------------------------------------------
 // Error helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * uplink-c reports end-of-stream as an UplinkError whose code is C's EOF (-1)
+ * and whose message is NULL — see mallocError() in uplink-c/error.go. Anything
+ * else on a read is a genuine failure and must not be swallowed as EOF.
+ */
+const UPLINK_EOF = -1;
 
 export class StorjError extends Error {
   code: number;
@@ -286,8 +308,9 @@ export class StorjClient {
 
     const projectResult = fn.open_project(accessResult.access);
     if (projectResult.error) {
-      fn.free_access_result(accessResult);
       const err = koffi.decode(projectResult.error, UplinkError);
+      fn.free_project_result(projectResult);
+      fn.free_access_result(accessResult);
       throw new StorjError(err.code, err.message ?? "Failed to open project");
     }
 
@@ -438,22 +461,42 @@ export class StorjClient {
     }
 
     const upload = uploadResult.upload;
-    let offset = 0;
-    while (offset < data.length) {
-      const chunk = data.subarray(offset);
-      const writeResult = fn.upload_write(upload, chunk, chunk.length);
-      if (writeResult.error) {
-        const err = koffi.decode(writeResult.error, UplinkError);
-        fn.upload_abort(upload);
-        throw new StorjError(err.code, err.message ?? "Write failed");
+    try {
+      let offset = 0;
+      while (offset < data.length) {
+        const chunk = data.subarray(offset);
+        const writeResult = fn.upload_write(upload, chunk, chunk.length);
+        const written = Number(writeResult.bytes_written);
+        let failure: StorjError | null = null;
+        if (writeResult.error) {
+          const err = koffi.decode(writeResult.error, UplinkError);
+          failure = new StorjError(err.code, err.message ?? "Write failed");
+        }
+        fn.free_write_result(writeResult);
+        if (failure) throw failure;
+        if (written === 0) {
+          throw new StorjError(0, "Upload stalled: uplink accepted 0 bytes");
+        }
+        offset += written;
       }
-      offset += Number(writeResult.bytes_written);
+
+      const commitErrPtr = fn.upload_commit(upload);
+      checkRawError(commitErrPtr, "Failed to commit upload");
+    } catch (err) {
+      const abortErrPtr = fn.upload_abort(upload);
+      if (abortErrPtr) fn.free_error(abortErrPtr);
+      throw err;
+    } finally {
+      fn.free_upload_result(uploadResult);
     }
 
-    const commitErrPtr = fn.upload_commit(upload);
-    checkRawError(commitErrPtr, "Failed to commit upload");
-
-    return { key, isPrefix: false, contentLength: data.length, created: Date.now(), expires: 0 };
+    return {
+      key,
+      isPrefix: false,
+      contentLength: data.length,
+      created: Math.floor(Date.now() / 1000),
+      expires: 0,
+    };
   }
 
   // -- Download --
@@ -476,14 +519,29 @@ export class StorjClient {
         const readResult = fn.download_read(download, buf, bufSize);
         const bytesRead = Number(readResult.bytes_read);
 
+        let eof = false;
+        let failure: StorjError | null = null;
+        if (readResult.error) {
+          const err = koffi.decode(readResult.error, UplinkError);
+          if (err.code === UPLINK_EOF || err.code === 0 || (err.message ?? "").includes("EOF")) {
+            eof = true;
+          } else {
+            failure = new StorjError(err.code, err.message ?? "Download read failed");
+          }
+        }
+        fn.free_read_result(readResult);
+
         if (bytesRead > 0) {
           chunks.push(buf.subarray(0, bytesRead));
         }
 
-        if (readResult.error || bytesRead === 0) break;
+        if (failure) throw failure;
+        if (eof || bytesRead === 0) break;
       }
     } finally {
-      fn.close_download(download);
+      const closeErrPtr = fn.close_download(download);
+      if (closeErrPtr) fn.free_error(closeErrPtr);
+      fn.free_download_result(dlResult);
     }
 
     return Buffer.concat(chunks);
@@ -521,7 +579,7 @@ export class StorjClient {
       throw new StorjError(err.code, err.message ?? "Failed to serialize access");
     }
 
-    const grant = serialized.string;
+    const grant = decodeCString(serialized.string);
     fn.free_string_result(serialized);
     fn.free_access_result(shareResult);
 

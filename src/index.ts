@@ -406,8 +406,11 @@ export default definePluginEntry({
             allowDownload: params.allowDownload,
             allowList: params.allowList,
           });
+          const receiveHint = params.prefix
+            ? ` They should call \`storj_receive\` with \`prefix: "${params.prefix}"\`.`
+            : "";
           return textResult(
-            `Restricted access grant for **${params.bucket}/${params.prefix ?? ""}**:\n\n\`\`\`\n${grant}\n\`\`\`\n\nShare this grant with others so they can access the specified path.`
+            `Restricted access grant for **${params.bucket}/${params.prefix ?? ""}**:\n\n\`\`\`\n${grant}\n\`\`\`\n\nShare this grant with others so they can access the specified path.${receiveHint}`
           );
         } catch (err) {
           return errorResult(err);
@@ -434,6 +437,12 @@ export default definePluginEntry({
             type: "string",
             description: "The shared Storj access grant string",
           },
+          prefix: {
+            type: "string",
+            description:
+              "Key prefix the grant is restricted to. Required when the sender scoped the grant " +
+              "to a prefix — listing without it is denied by the macaroon caveat.",
+          },
           download: {
             type: "boolean",
             description: "Download all files to localDir (default false — just list)",
@@ -448,7 +457,12 @@ export default definePluginEntry({
       },
       async execute(
         _toolCallId: string,
-        params: { accessGrant: string; download?: boolean; localDir?: string }
+        params: {
+          accessGrant: string;
+          prefix?: string;
+          download?: boolean;
+          localDir?: string;
+        }
       ) {
         let client: StorjClient | null = null;
         try {
@@ -460,8 +474,21 @@ export default definePluginEntry({
           }
 
           const allObjects: { bucket: string; key: string; size: number }[] = [];
+          const denied: string[] = [];
           for (const b of buckets) {
-            const objects = client.listObjects(b.name, { recursive: true });
+            let objects;
+            try {
+              objects = client.listObjects(b.name, {
+                prefix: params.prefix,
+                recursive: true,
+              });
+            } catch (err) {
+              // A grant scoped to a prefix denies unscoped listing — the caller
+              // needs to pass the prefix the sender shared.
+              const message = err instanceof Error ? err.message.split("\n")[0] : String(err);
+              denied.push(`${b.name} (${message})`);
+              continue;
+            }
             for (const o of objects) {
               if (!o.isPrefix) {
                 allObjects.push({ bucket: b.name, key: o.key, size: o.contentLength });
@@ -470,8 +497,12 @@ export default definePluginEntry({
           }
 
           if (allObjects.length === 0) {
+            const hint = denied.length
+              ? `\n\nListing was denied for: ${denied.join(", ")}\nThe grant is probably scoped ` +
+                "to a prefix — call this tool again with the `prefix` the sender shared."
+              : "";
             return textResult(
-              `Shared grant provides access to bucket(s): ${buckets.map(b => b.name).join(", ")} — but no files found.`
+              `Shared grant provides access to bucket(s): ${buckets.map(b => b.name).join(", ")} — but no files found.${hint}`
             );
           }
 
